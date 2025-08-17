@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TV Remote PDF/Image Viewer</title>
+  <style>
+    html, body {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      font-family: sans-serif;
+      background: #111;
+      color: white;
+    }
+
+    #viewer-container {
+      width: 100%; height: 100%;
+      display: flex; justify-content: center; align-items: center;
+      overflow: hidden;
+    }
+
+    #rotate-container {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transform-origin: center center;
+      transition: transform 0.2s ease;
+      width: 100%; height: 100%;
+      position: relative;
+    }
+
+    #controls {
+      position: absolute; top: 10px; left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      padding: 6px 10px;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: opacity 0.5s ease;
+      opacity: 1;
+      z-index: 10;
+    }
+
+    #viewer, #pdfCanvas {
+      max-width: 100%; max-height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewer-container">
+    <div id="rotate-container">
+      <div id="controls">
+        <input type="file" id="fileInput" accept="image/*,.pdf">
+        <p>📺 Remote Keys: Arrow = Move | Vol+/- = Zoom | P+/P- = Next/Prev Page | Slow FF = Rotate Right | FF = Rotate Left | 0 = Choose File | Back = Reset</p>
+      </div>
+      <img id="viewer" style="display:none;">
+      <canvas id="pdfCanvas" style="display:none;"></canvas>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.12.313/pdf.min.js"></script>
+  <script>
+    let scale = 1, translateX = 0, translateY = 0, rotation = 0;
+    let pdfDoc = null, currentPage = 1;
+    const img = document.getElementById("viewer");
+    const canvas = document.getElementById("pdfCanvas");
+    const ctx = canvas.getContext("2d");
+    const rotateContainer = document.getElementById("rotate-container");
+    const controls = document.getElementById("controls");
+    const fileInput = document.getElementById("fileInput");
+    let hideTimeout;
+
+    function applyTransform() {
+      const transform = `translate(${translateX}px, ${translateY}px) scale(${scale}) rotate(${rotation}deg)`;
+      rotateContainer.style.transform = transform;
+    }
+
+    function zoomIn() { scale *= 1.2; applyTransform(); showControls(); }
+    function zoomOut() { scale /= 1.2; applyTransform(); showControls(); }
+
+    function move(dir) {
+      const step = 80;
+      if (dir==='up') translateY -= step;
+      if (dir==='down') translateY += step;
+      if (dir==='left') translateX -= step;
+      if (dir==='right') translateX += step;
+      applyTransform();
+      showControls();
+    }
+
+    function rotateLeft() { rotation -= 90; fitToScreen(); showControls(); }
+    function rotateRight() { rotation += 90; fitToScreen(); showControls(); }
+
+    function fitToScreen() {
+      scale = 1; translateX = 0; translateY = 0;
+      applyTransform();
+    }
+
+    function renderPage(pageNum) {
+      if (!pdfDoc) return;
+      pdfDoc.getPage(pageNum).then(page => {
+        const viewport = page.getViewport({ scale: 1.5 });
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        page.render({ canvasContext: ctx, viewport: viewport });
+      });
+      applyTransform();
+    }
+
+    function nextPage() {
+      if (!pdfDoc || currentPage >= pdfDoc.numPages) return;
+      currentPage++;
+      renderPage(currentPage);
+    }
+
+    function prevPage() {
+      if (!pdfDoc || currentPage <= 1) return;
+      currentPage--;
+      renderPage(currentPage);
+    }
+
+    document.getElementById("fileInput").addEventListener("change", function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+
+      scale = 1; translateX = 0; translateY = 0; rotation = 0;
+
+      if (file.type === "application/pdf") {
+        img.style.display = "none";
+        canvas.style.display = "block";
+        pdfjsLib.getDocument(url).promise.then(pdf => {
+          pdfDoc = pdf;
+          currentPage = 1;
+          renderPage(currentPage);
+        });
+      } else {
+        pdfDoc = null;
+        img.style.display = "block";
+        canvas.style.display = "none";
+        img.src = url;
+      }
+      applyTransform();
+      showControls();
+    });
+
+    function getRotatedDirection(key) {
+      const angle = ((rotation % 360) + 360) % 360;
+
+      // Invert arrow keys
+      const inverted = {
+        ArrowUp: "down",
+        ArrowDown: "up",
+        ArrowLeft: "right",
+        ArrowRight: "left"
+      };
+
+      const baseDir = inverted[key] || null;
+      const map = {
+        0:    { up: "up", down: "down", left: "left", right: "right" },
+        90:   { up: "right", down: "left", left: "up", right: "down" },
+        180:  { up: "down", down: "up", left: "right", right: "left" },
+        270:  { up: "left", down: "right", left: "down", right: "up" }
+      };
+
+      if (!baseDir) return null;
+      return map[angle][baseDir];
+    }
+
+    document.addEventListener("keydown", function(e) {
+      const dir = getRotatedDirection(e.key);
+      if (dir) move(dir);
+      else {
+        // Keyboard keys for laptops remain the same
+        switch(e.key) {
+          case "+": zoomIn(); break;
+          case "-": zoomOut(); break;
+          case "Enter": zoomIn(); break;
+          case "Backspace": zoomOut(); break;
+          case "r": case "R": rotateRight(); break;
+          case "l": case "L": rotateLeft(); break;
+          case "n": case "N": nextPage(); break;
+          case "p": case "P": prevPage(); break;
+        }
+
+        // Remote-specific keys
+        switch(e.key) {
+          case "AudioVolumeUp": zoomIn(); break;    // Vol+
+          case "AudioVolumeDown": zoomOut(); break; // Vol-
+          case "PageUp": nextPage(); break;         // P+
+          case "PageDown": prevPage(); break;       // P-
+          case "MediaTrackSlowForward": rotateRight(); break; // Slow Forward
+          case "MediaTrackFastForward": rotateLeft(); break;  // Fast Forward
+          case "0": fileInput.click(); break;       // Choose File
+          case "Back": fitToScreen(); break;        // Back
+        }
+      }
+    });
+
+    function showControls() {
+      controls.style.opacity = 1;
+      clearTimeout(hideTimeout);
+      hideTimeout = setTimeout(() => { controls.style.opacity = 0; }, 3000);
+    }
+
+    document.addEventListener("mousemove", showControls);
+    hideTimeout = setTimeout(() => { controls.style.opacity = 0; }, 3000);
+  </script>
+</body>
+</html>
